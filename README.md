@@ -252,3 +252,41 @@ Ana iş mantığı arayüzde değil veritabanında çalışır — arayüz sadec
 | `sayim_onayla` | Sayım farkını yetkili onayıyla stoğa işler |
 | `parti_imha_et` / `geri_cagirma_baslat` | İmha ve geri çağırma zinciri |
 | `gunluk_skt_kontrol` | SKT'si geçen partileri işaretler, uyarı üretir |
+
+---
+
+## 9. Pazaryeri entegrasyonu (Trendyol)
+
+Streamlit Community Cloud arka planda iş çalıştıramaz. Bu yüzden senkronizasyonu
+**GitHub Actions** yapar; Streamlit arayüzü yalnızca sonucu gösterir
+(**Satış → Pazaryeri Entegrasyonu** ekranı).
+
+```
+entegrasyon/
+  trendyol.py        Trendyol API istemcisi (hız sınırı, yeniden deneme, hata çevirisi)
+  erp.py             Supabase tarafı — normal ERP kullanıcısı olarak giriş yapar
+  senkron.py         İşçi: siparis / stok / durum
+  requirements.txt
+.github/workflows/trendyol-senkron.yml   15 dakikada bir + elle çalıştırma
+```
+
+**Üç iş**
+
+| İş | Yön | Ne yapar |
+|---|---|---|
+| `siparis` | Trendyol → ERP | Yeni paketleri çeker, `pazaryeri_siparis_kaydet` ile yazar, FEFO rezervasyonunu tetikler |
+| `stok` | ERP → Trendyol | `kanal_gonderilecek_stok` sonucunu gönderir (SKT'si geçmiş / raf ömrü kısa partiler hariç) |
+| `durum` | ERP → Trendyol | Toplamaya alınanı `Picking`, paketleneni `Invoiced` yapar |
+
+**Gerekli GitHub Secrets** (Settings → Secrets and variables → Actions):
+`SUPABASE_URL`, `SUPABASE_KEY`, `ERP_KULLANICI`, `ERP_SIFRE`,
+`TY_SATICI_ID`, `TY_API_KEY`, `TY_API_SECRET`
+
+**İsteğe bağlı Variables:** `TY_TEST`, `TY_GERIYE_SAAT`, `TY_FIYAT_GONDER`,
+`TY_FIYAT_TOPLAM`, `TY_KENDI_KARGO`, `TY_KURU`, `ISLEMLER`
+
+İşçi **service_role anahtarını kullanmaz**; `entegrasyon` adlı normal bir ERP
+kullanıcısı olarak giriş yapar. Böylece RLS, maliyet maskeleme ve denetim izi
+entegrasyon için de aynen çalışır.
+
+Her çalışma `entegrasyon_log` tablosuna yazılır ve arayüzde görünür.
