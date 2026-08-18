@@ -7,9 +7,10 @@ name: Trendyol senkron
 #                    TY_FIYAT_TOPLAM, TY_KENDI_KARGO, TY_KURU, KULLANICI_ALAN_ADI
 
 on:
-  schedule:
-    # 15 dakikada bir (UTC). GitHub yoğunlukta birkaç dakika gecikmeli başlatabilir.
-    - cron: '*/15 * * * *'
+  # ZAMANLAMA GEÇİCİ OLARAK KAPALI — canlıya geçmeye hazır olunca aşağıdaki
+  # üç satırın başındaki # işaretlerini kaldırın (15 dakikada bir çalışır).
+  # schedule:
+  #   - cron: '*/15 * * * *'
   workflow_dispatch:
     inputs:
       islemler:
