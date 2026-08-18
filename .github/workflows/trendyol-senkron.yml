@@ -17,6 +17,10 @@ on:
         description: 'Çalıştırılacak işler (virgülle): siparis, stok, durum'
         required: false
         default: 'siparis,stok,durum'
+      geriye_saat:
+        description: 'Kaç saat geriye bakılsın? (boş = 24 · Trendyol üst sınırı 13 gün = 312)'
+        required: false
+        default: ''
       kuru:
         description: 'Kuru çalışma — hiçbir yere yazma, sadece ne olacağını raporla'
         type: boolean
@@ -63,7 +67,7 @@ jobs:
           KULLANICI_ALAN_ADI: ${{ vars.KULLANICI_ALAN_ADI || 'kayranerp.com' }}
           ISLEMLER: ${{ inputs.islemler || vars.ISLEMLER || 'siparis,stok,durum' }}
           TY_TEST: ${{ vars.TY_TEST }}
-          TY_GERIYE_SAAT: ${{ vars.TY_GERIYE_SAAT || '24' }}
+          TY_GERIYE_SAAT: ${{ inputs.geriye_saat || vars.TY_GERIYE_SAAT || '24' }}
           TY_FIYAT_GONDER: ${{ vars.TY_FIYAT_GONDER }}
           TY_FIYAT_TOPLAM: ${{ vars.TY_FIYAT_TOPLAM }}
           TY_KENDI_KARGO: ${{ vars.TY_KENDI_KARGO }}
