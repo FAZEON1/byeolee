@@ -213,12 +213,14 @@ def tablo(
             unsafe_allow_html=True,
         )
 
+    # height=None yeni Streamlit sürümlerinde hata veriyor — yalnızca değer varsa gönder
+    ek = {"height": yukseklik} if yukseklik else {}
     st.dataframe(
         gosterim,
         width="stretch",
         hide_index=True,
-        height=yukseklik,
         column_config=kolonlar or {},
+        **ek,
     )
 
     if indir and not gosterim.empty:
