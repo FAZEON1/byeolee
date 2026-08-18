@@ -156,12 +156,15 @@ with st.sidebar:
           <div style="min-width:0">
             <div style="color:#fff;font-size:.82rem;font-weight:600;line-height:1.2;
                  overflow:hidden;text-overflow:ellipsis">{p.get('ad_soyad','')}</div>
-            <div style="color:#64748b;font-size:.72rem">{auth.ROL_AD.get(auth.rol(), auth.rol())}</div>
+            <div style="color:#64748b;font-size:.72rem">{auth.kullanici_adi()} ·
+                 {auth.ROL_AD.get(auth.rol(), auth.rol())}</div>
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    if st.button("🔑 Şifre Değiştir", use_container_width=True):
+        auth.sifre_degistir_penceresi()
     c1, c2 = st.columns(2)
     if c1.button("⟳ Yenile", use_container_width=True):
         db.onbellek_temizle()

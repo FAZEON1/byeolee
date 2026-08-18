@@ -109,14 +109,53 @@ Tarayıcıda http://localhost:8501 açılır.
 
 ## 3. Giriş bilgileri
 
-| Rol | E-posta | Şifre |
-|---|---|---|
-| Sistem Yöneticisi | `admin@kayranerp.com` | `Kayran2026!` |
-| Depo Sorumlusu | `depo@kayranerp.com` | `Depo2026!` |
-| Satış (maliyet göremez) | `satis@kayranerp.com` | `Satis2026!` |
+Kullanıcılar **e-posta değil kullanıcı adı** ile girer.
 
-> **İlk iş:** Bu şifreleri değiştirin — Supabase paneli → *Authentication → Users →
-> kullanıcı → Reset password*.
+| Kullanıcı adı | Ad | Rol | Başlangıç şifresi |
+|---|---|---|---|
+| `ibrahim` | İbrahim | Sistem Yöneticisi | `1234` |
+| `hakan` | Hakan | Yönetici | `1234` |
+| `mustafa` | Mustafa | Yönetici | `1234` |
+| `ebubekir` | Ebubekir | Yönetici | `1234` |
+
+Herkes giriş yaptıktan sonra sol menüdeki **🔑 Şifre Değiştir** ile kendi şifresini
+belirleyebilir. Yeni şifre en az **6 karakter** olmalıdır (Supabase kuralı).
+
+### Nasıl çalışıyor
+
+Kullanıcı `hakan` yazar; uygulama bunu arka planda `hakan@kayranerp.com` adresine
+çevirip Supabase Auth'a sorar. Alan adı `secrets.toml` içindeki `KULLANICI_ALAN_ADI`
+ile değiştirilebilir. Kullanıcı e-posta görmez, ancak oturum gerçek bir Supabase
+oturumu olduğu için RLS, maliyet maskeleme ve denetim izi olduğu gibi çalışır.
+
+> **Neden şifreler secrets.toml'da tutulmuyor?** İki nedenle: (1) çalışan uygulamada
+> secrets dosyası değiştirilemez, yani kullanıcı kendi şifresini yenileyemezdi;
+> (2) veritabanı kimin bağlandığını bilemez, dolayısıyla rol bazlı maliyet maskeleme
+> ve "kim değiştirdi" kaydı çalışmazdı.
+
+### Yeni kullanıcı ekleme
+
+Supabase SQL Editor'de (sistem yöneticisi hesabıyla ERP'ye girmiş olmanız gerekmez,
+SQL Editor doğrudan çalışır):
+
+```sql
+select erp_kullanici_olustur(
+  'ayse@kayranerp.com',   -- kullanıcı adı + @kayranerp.com
+  'Gecici123',            -- başlangıç şifresi (en az 6 karakter)
+  'Ayşe Yılmaz',          -- ad soyad
+  'depo_sorumlusu'        -- rol
+);
+```
+
+Kullanıcı bundan sonra `ayse` yazarak girer.
+
+### Şifre sıfırlama (unutan kullanıcı için)
+
+```sql
+update auth.users
+   set encrypted_password = extensions.crypt('Yeni1234', extensions.gen_salt('bf'))
+ where email = 'ayse@kayranerp.com';
+```
 
 ---
 
