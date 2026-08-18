@@ -5,6 +5,7 @@ Doğrulanmış uç noktalar (Ağustos 2026):
   Paket durumu  : PUT  /integration/order/sellers/{id}/shipment-packages/{paketId}
   Takip no      : PUT  /integration/order/sellers/{id}/shipment-packages/{paketId}/tracking-details
   Stok/fiyat    : POST /integration/inventory/sellers/{id}/products/price-and-inventory
+  Ürün listesi  : GET  /integration/product/sellers/{id}/products   (salt okuma)
 
 Kritik iki kural:
   * User-Agent ZORUNLU. Formatı "{saticiId} - SelfIntegration". Yoksa 403 döner.
@@ -112,6 +113,26 @@ class Trendyol:
             icerik = veri.get("content") or []
             for paket in icerik:
                 yield paket
+            toplam_sayfa = veri.get("totalPages") or 0
+            sayfa += 1
+            if sayfa >= toplam_sayfa or not icerik:
+                break
+
+    # ---------------------------------------------------------------- ürün kataloğu
+    def urunler(self, sayfa_boyu: int = 200, arsivli_dahil: bool = False):
+        """Satıcının Trendyol ürün kataloğunu sayfa sayfa döndürür (generator).
+
+        SALT OKUMA — Trendyol'da hiçbir değişiklik yapmaz.
+        """
+        sayfa = 0
+        while True:
+            veri = self._istek(
+                "GET", f"/integration/product/sellers/{self.satici_id}/products",
+                params={"page": sayfa, "size": sayfa_boyu,
+                        "archived": "true" if arsivli_dahil else "false"})
+            icerik = veri.get("content") or []
+            for urun in icerik:
+                yield urun
             toplam_sayfa = veri.get("totalPages") or 0
             sayfa += 1
             if sayfa >= toplam_sayfa or not icerik:
