@@ -1,1 +1,70 @@
-placeholder
+name: Trendyol senkron
+
+# Streamlit Community Cloud arka planda iş çalıştıramaz; senkronizasyonu bu iş akışı yapar.
+# Gerekli Secrets  : SUPABASE_URL, SUPABASE_KEY, ERP_KULLANICI, ERP_SIFRE,
+#                    TY_SATICI_ID, TY_API_KEY, TY_API_SECRET
+# İsteğe bağlı Vars: ISLEMLER, TY_TEST, TY_GERIYE_SAAT, TY_FIYAT_GONDER,
+#                    TY_FIYAT_TOPLAM, TY_KENDI_KARGO, TY_KURU, KULLANICI_ALAN_ADI
+
+on:
+  schedule:
+    # 15 dakikada bir (UTC). GitHub yoğunlukta birkaç dakika gecikmeli başlatabilir.
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      islemler:
+        description: 'Çalıştırılacak işler (virgülle): siparis, stok, durum'
+        required: false
+        default: 'siparis,stok,durum'
+      kuru:
+        description: 'Kuru çalışma — hiçbir yere yazma, sadece ne olacağını raporla'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: trendyol-senkron
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  senkron:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Depoyu al
+        uses: actions/checkout@v4
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: entegrasyon/requirements.txt
+
+      - name: Bağımlılıkları yükle
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r entegrasyon/requirements.txt
+
+      - name: Senkronizasyonu çalıştır
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          ERP_KULLANICI: ${{ secrets.ERP_KULLANICI }}
+          ERP_SIFRE: ${{ secrets.ERP_SIFRE }}
+          TY_SATICI_ID: ${{ secrets.TY_SATICI_ID }}
+          TY_API_KEY: ${{ secrets.TY_API_KEY }}
+          TY_API_SECRET: ${{ secrets.TY_API_SECRET }}
+          KULLANICI_ALAN_ADI: ${{ vars.KULLANICI_ALAN_ADI }}
+          ISLEMLER: ${{ inputs.islemler || vars.ISLEMLER || 'siparis,stok,durum' }}
+          TY_TEST: ${{ vars.TY_TEST }}
+          TY_GERIYE_SAAT: ${{ vars.TY_GERIYE_SAAT }}
+          TY_FIYAT_GONDER: ${{ vars.TY_FIYAT_GONDER }}
+          TY_FIYAT_TOPLAM: ${{ vars.TY_FIYAT_TOPLAM }}
+          TY_KENDI_KARGO: ${{ vars.TY_KENDI_KARGO }}
+          TY_KURU: ${{ inputs.kuru && '1' || vars.TY_KURU }}
+        run: python -m entegrasyon.senkron
