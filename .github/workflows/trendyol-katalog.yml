@@ -1,1 +1,63 @@
-placeholder
+name: Trendyol katalog anlık görüntüsü
+
+# SALT OKUMA. Trendyol'a hiçbir yazma yapmaz; yalnızca ürün listesini çeker
+# ve veri/trendyol-urunler.json dosyasına yazıp depoya commit eder.
+# Elle çalıştırılır, zamanlaması yoktur.
+
+on:
+  workflow_dispatch:
+    inputs:
+      arsivli:
+        description: 'Arşivlenmiş ürünler de dahil edilsin mi?'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: trendyol-katalog
+  cancel-in-progress: false
+
+jobs:
+  katalog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Depoyu al
+        uses: actions/checkout@v4
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: entegrasyon/requirements.txt
+
+      - name: Bağımlılıkları yükle
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r entegrasyon/requirements.txt
+
+      - name: Katalogu çek
+        env:
+          TY_SATICI_ID: ${{ secrets.TY_SATICI_ID }}
+          TY_API_KEY: ${{ secrets.TY_API_KEY }}
+          TY_API_SECRET: ${{ secrets.TY_API_SECRET }}
+          TY_TEST: ${{ vars.TY_TEST }}
+          TY_ARSIVLI: ${{ inputs.arsivli && '1' || '' }}
+        run: python -m entegrasyon.disari_aktar
+
+      - name: Sonucu depoya yaz
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add veri/
+          if git diff --cached --quiet; then
+            echo "Değişiklik yok, commit atlanıyor."
+          else
+            git commit -m "Trendyol katalog anlık görüntüsü"
+            git push
+          fi
