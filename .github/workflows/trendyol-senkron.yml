@@ -50,22 +50,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r entegrasyon/requirements.txt
 
-      - name: Tanılama (geçici)
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          ERP_KULLANICI: ${{ secrets.ERP_KULLANICI }}
-          ERP_SIFRE: ${{ secrets.ERP_SIFRE }}
-        run: |
-          python - <<'PY'
-          import os
-          beklenen = {"SUPABASE_URL": 40, "SUPABASE_KEY": 46, "ERP_KULLANICI": 11, "ERP_SIFRE": 15}
-          for ad, bek in beklenen.items():
-              d = os.environ.get(ad, "")
-              print(f"{ad:15} uzunluk={len(d):3}  beklenen={bek:3}  "
-                    f"kirpilmis_uzunluk={len(d.strip()):3}  bos={d == ''}")
-          PY
-
       - name: Senkronizasyonu çalıştır
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -75,10 +59,10 @@ jobs:
           TY_SATICI_ID: ${{ secrets.TY_SATICI_ID }}
           TY_API_KEY: ${{ secrets.TY_API_KEY }}
           TY_API_SECRET: ${{ secrets.TY_API_SECRET }}
-          KULLANICI_ALAN_ADI: ${{ vars.KULLANICI_ALAN_ADI }}
+          KULLANICI_ALAN_ADI: ${{ vars.KULLANICI_ALAN_ADI || 'kayranerp.com' }}
           ISLEMLER: ${{ inputs.islemler || vars.ISLEMLER || 'siparis,stok,durum' }}
           TY_TEST: ${{ vars.TY_TEST }}
-          TY_GERIYE_SAAT: ${{ vars.TY_GERIYE_SAAT }}
+          TY_GERIYE_SAAT: ${{ vars.TY_GERIYE_SAAT || '24' }}
           TY_FIYAT_GONDER: ${{ vars.TY_FIYAT_GONDER }}
           TY_FIYAT_TOPLAM: ${{ vars.TY_FIYAT_TOPLAM }}
           TY_KENDI_KARGO: ${{ vars.TY_KENDI_KARGO }}
