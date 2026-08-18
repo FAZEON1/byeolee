@@ -50,6 +50,22 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r entegrasyon/requirements.txt
 
+      - name: Tanılama (geçici)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          ERP_KULLANICI: ${{ secrets.ERP_KULLANICI }}
+          ERP_SIFRE: ${{ secrets.ERP_SIFRE }}
+        run: |
+          python - <<'PY'
+          import os
+          beklenen = {"SUPABASE_URL": 40, "SUPABASE_KEY": 46, "ERP_KULLANICI": 11, "ERP_SIFRE": 15}
+          for ad, bek in beklenen.items():
+              d = os.environ.get(ad, "")
+              print(f"{ad:15} uzunluk={len(d):3}  beklenen={bek:3}  "
+                    f"kirpilmis_uzunluk={len(d.strip()):3}  bos={d == ''}")
+          PY
+
       - name: Senkronizasyonu çalıştır
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
