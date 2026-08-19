@@ -222,11 +222,13 @@ def _form(urun_id: int | None) -> None:
                                    value=int(u.get("min_satis_raf_omru_gun") or 0), step=1,
                                    help="Bu sürenin altındaki parti satılamaz")
 
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         form = c1.text_input("Ürün Formu", value=u.get("urun_formu") or "",
                              placeholder="krem, serum, sıvı…")
         saklama = c2.text_input("Saklama Koşulu", value=u.get("saklama_kosulu") or "")
-        durum = c3.selectbox("Durum", ["aktif", "pasif", "askida"],
+        uts = c3.text_input("ÜTS Bildirim No", value=u.get("bildirim_no") or "",
+                            help="Sağlık Bakanlığı Ürün Takip Sistemi kozmetik bildirim numarası")
+        durum = c4.selectbox("Durum", ["aktif", "pasif", "askida"],
                              index=["aktif", "pasif", "askida"].index(u.get("durum") or "aktif"),
                              format_func=lambda d: ui.DURUM_AD.get(d, d))
 
@@ -250,6 +252,7 @@ def _form(urun_id: int | None) -> None:
                 "tedarik_suresi_gun": tedarik or None,
                 "min_satis_raf_omru_gun": min_omur or None,
                 "urun_formu": form or None, "saklama_kosulu": saklama or None,
+                "bildirim_no": uts.strip() or None,
                 "alerjen_notu": alerjen or None, "inci_icerik": inci or None,
                 "tehlikeli_madde": tehlikeli, "durum": durum,
             }
