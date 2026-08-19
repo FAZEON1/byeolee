@@ -46,7 +46,7 @@ if not auth.oturum_acik():
 from modules import (  # noqa: E402
     ayarlar, bildirimler, cariler, dashboard, denetim, entegrasyon, hareketler,
     iadeler, ithalat, kullanicilar, malkabul, partiler, raporlar, satinalma,
-    sayim, sevkiyat, siparisler, stok, urunler,
+    sayim, sevkiyat, siparisler, stok, urunler, uts,
 )
 
 # ---------------------------------------------------------------- sayaçlar
@@ -114,6 +114,8 @@ gruplar: dict[str, list] = {
     ],
     "Sistem": [],
 }
+
+gruplar["Ürün & Stok"].append(_s(uts.goster, "ÜTS Takibi", "🏷️", "uts"))
 
 if auth.yetkili("depo"):
     gruplar["Ürün & Stok"] += [

@@ -290,3 +290,24 @@ kullanıcısı olarak giriş yapar. Böylece RLS, maliyet maskeleme ve denetim i
 entegrasyon için de aynen çalışır.
 
 Her çalışma `entegrasyon_log` tablosuna yazılır ve arayüzde görünür.
+
+
+---
+
+## 10. ÜTS (Ürün Takip Sistemi) takibi
+
+`modules/uts.py` — **Ürün & Stok → ÜTS Takibi** ekranı.
+
+Kozmetik ürünlerin Sağlık Bakanlığı ÜTS bildirimi zorunludur; bildirimi ürünü
+piyasaya arz eden (üretici veya **ithalatçı**) yapar. Ekran üç sekmeden oluşur:
+
+| Sekme | İçerik |
+|---|---|
+| Eksikler | Barkodu olan ama ÜTS bildirim numarası girilmemiş aktif ürünler; numara doğrudan tabloda düzenlenip toplu kaydedilir |
+| Girilmiş olanlar | Numarası girilmiş ürünler (düzeltme için de düzenlenebilir) |
+| Barkodsuz ürünler | Set/kit/aksesuar gibi GTIN'i olmayan, dolayısıyla ÜTS'de sorgulanamayan ürünler |
+
+Numara `urunler.bildirim_no` alanında tutulur; Ürünler ekranındaki ürün formundan
+da girilebilir. Sorgulama ÜTS portalı oturum ve doğrulama istediği için uygulama
+içinden otomatik yapılamaz:
+<https://utsuygulama.saglik.gov.tr/UTS/vatandas>
