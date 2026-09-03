@@ -33,13 +33,31 @@ def goster() -> None:
     if df.empty:
         st.info("İthalat dosyası yok.")
         return
-    ham = db.sorgu("ithalat_dosyalari", select="id,dagitim_yapildi")
-    dagitim = dict(zip(ham["id"], ham["dagitim_yapildi"])) if not ham.empty else {}
+    # Fatura no ve tarih görünümde olmayabilir; doğrudan tablodan alıyoruz.
+    ham = db.sorgu("ithalat_dosyalari",
+                   select="id,dagitim_yapildi,fatura_no,siparis_tarihi")
     df = df.copy()
-    df["dagitim_yapildi"] = df["dosya_id"].map(dagitim).fillna(False)
+    if not ham.empty:
+        h = ham.set_index("id")
+        df["dagitim_yapildi"] = df["dosya_id"].map(h["dagitim_yapildi"]).fillna(False)
+        df["fatura_no"] = df["dosya_id"].map(h["fatura_no"])
+        df["fatura_tarihi"] = pd.to_datetime(
+            df["dosya_id"].map(h["siparis_tarihi"]), errors="coerce")
+    else:
+        df["dagitim_yapildi"] = False
+        df["fatura_no"] = None
+        df["fatura_tarihi"] = pd.NaT
+    df = df.sort_values("fatura_tarihi", ascending=False, na_position="last")
+
+    df = _filtrele(df)
+    if df.empty:
+        st.info("Filtrelere uyan ithalat dosyası yok.")
+        return
 
     t = pd.DataFrame({
         "Dosya No": df["dosya_no"],
+        "Fatura No": df["fatura_no"].fillna("—"),
+        "Fatura Tarihi": df["fatura_tarihi"].dt.strftime("%d.%m.%Y").fillna("—"),
         "Tedarikçi": df["tedarikci"],
         "Durum": df["durum"].apply(ui.durum_etiket),
         "Kalem": df["kalem_sayisi"],
@@ -52,7 +70,7 @@ def goster() -> None:
     t["Dağıtım"] = df["dagitim_yapildi"].apply(lambda x: "🟢 Yapıldı" if x else "🟡 Bekliyor")
 
     q = st.text_input("Ara", key="ith_ara", label_visibility="collapsed",
-                      placeholder="Dosya no, tedarikçi, durum…")
+                      placeholder="Dosya no veya fatura no ara…")
     gosterim = t
     if q:
         maske = t.astype(str).apply(
@@ -78,6 +96,45 @@ def goster() -> None:
         # Görünen tablo filtrelenmiş olabilir; orijinal satıra index ile dönüyoruz
         sira = gosterim.index[satirlar[0]]
         _detay_pencere(int(df.loc[sira, "dosya_id"]))
+
+
+def _filtrele(df: pd.DataFrame) -> pd.DataFrame:
+    """Tedarikçi, durum ve fatura tarihi filtreleri. Filtrelenmiş df döndürür."""
+    with st.expander("🔎 Filtreler", expanded=False):
+        c1, c2 = st.columns(2)
+        tedarikciler = sorted(x for x in df["tedarikci"].dropna().unique())
+        ted_sec = c1.multiselect("Tedarikçi", tedarikciler, key="ith_f_ted",
+                                 placeholder="Tümü")
+        durumlar = sorted(x for x in df["durum"].dropna().unique())
+        durum_sec = c2.multiselect(
+            "Durum", durumlar, key="ith_f_durum", placeholder="Tümü",
+            format_func=lambda d: ui.DURUM_AD.get(d, d))
+
+        gecerli = df["fatura_tarihi"].dropna()
+        aralik = None
+        if not gecerli.empty:
+            enaz, encok = gecerli.min().date(), gecerli.max().date()
+            c3, c4 = st.columns([3, 1])
+            aralik = c3.date_input(
+                "Fatura tarihi aralığı", value=(enaz, encok),
+                min_value=enaz, max_value=encok, key="ith_f_tarih",
+                format="DD.MM.YYYY")
+            c4.markdown("&nbsp;", unsafe_allow_html=True)
+            if c4.button("Temizle", key="ith_f_sifirla", use_container_width=True):
+                for anahtar in ("ith_f_ted", "ith_f_durum", "ith_f_tarih", "ith_ara"):
+                    st.session_state.pop(anahtar, None)
+                st.rerun()
+
+    if ted_sec:
+        df = df[df["tedarikci"].isin(ted_sec)]
+    if durum_sec:
+        df = df[df["durum"].isin(durum_sec)]
+    if aralik and isinstance(aralik, (list, tuple)) and len(aralik) == 2:
+        bas, son = aralik
+        df = df[df["fatura_tarihi"].isna()
+                | ((df["fatura_tarihi"].dt.date >= bas)
+                   & (df["fatura_tarihi"].dt.date <= son))]
+    return df
 
 
 @st.dialog("İthalat Dosyası — Detay", width="large")
