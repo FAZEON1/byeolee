@@ -2,3 +2,4 @@ streamlit>=1.40,<2
 supabase>=2.10,<3
 pandas>=2.2
 altair>=5.4
+openpyxl
