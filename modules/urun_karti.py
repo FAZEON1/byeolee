@@ -90,14 +90,18 @@ def _ozet(u: pd.Series, M: bool, kur: float) -> None:
     kartlar = [
         {"baslik": "Bizim Stok", "deger": ui.sayi_bicim(u["fiziksel"]),
          "alt": f"{ui.sayi_bicim(u['satilabilir'])} satılabilir", "renk": "lacivert"},
+        {"baslik": "Partnerde", "deger": ui.sayi_bicim(u.get("partner_toplam_adet")),
+         "alt": (f"{ui.sayi_bicim(u.get('partner_dahil_adet'))} değere dahil"
+                 if (u.get("partner_toplam_adet") or 0) else "kayıt yok"),
+         "renk": "turuncu" if (u.get("partner_toplam_adet") or 0) else "gri"},
     ]
     if M:
         pacal_usd = u.get("ort_birim_maliyet_usd")
-        stok_usd = u.get("stok_degeri_usd")
+        stok_usd = u.get("toplam_stok_degeri_usd")
         kartlar += [
             {"baslik": "Stok Değeri", "deger": _dolar(stok_usd, 0),
-             "alt": (f"≈ {ui.para0(float(stok_usd) * kur)} · kur {kur:.2f}"
-                     if pd.notna(stok_usd) else "paçal × canlı stok"),
+             "alt": (f"≈ {ui.para0(float(stok_usd) * kur)} · depo + Evkur"
+                     if pd.notna(stok_usd) else "paçal × değerlenen stok"),
              "renk": "yesil"},
             {"baslik": "Paçal Maliyet", "deger": _dolar(pacal_usd, 4),
              "alt": (f"≈ {ui.para(float(pacal_usd) * kur)} · güncel kurla"
@@ -115,8 +119,9 @@ def _ozet(u: pd.Series, M: bool, kur: float) -> None:
     with c1:
         _depolar(u)
     with c2:
-        _skt_ozeti(u)
+        _partner(u)
 
+    _skt_ozeti(u)
     _genel_toplam(u)
 
 
@@ -142,6 +147,30 @@ def _depolar(u: pd.Series) -> None:
         st.progress(min(float(r.miktar) / toplam, 1.0))
 
 
+def _partner(u: pd.Series) -> None:
+    st.markdown("##### 🛍️ Partner Stoğu")
+    d = db.sorgu("v_dis_stok_guncel",
+                 select="kanal_ad,kanal_kod,stok_degerine_dahil,miktar,sube,rapor_tarihi",
+                 filtreler=[("urun_id", "eq", int(u["urun_id"]))])
+    if d.empty:
+        st.caption("✓ Partnerlerde stok kaydı yok")
+        return
+    d = d.copy()
+    d["miktar"] = pd.to_numeric(d["miktar"], errors="coerce").fillna(0)
+    g = (d.groupby(["kanal_ad", "stok_degerine_dahil"], as_index=False)
+           .agg(miktar=("miktar", "sum"), sube=("sube", "nunique")))
+    toplam = float(g["miktar"].sum()) or 1.0
+    for r in g.sort_values("miktar", ascending=False).itertuples():
+        a, b = st.columns([4, 1])
+        etiket = "değere dahil" if r.stok_degerine_dahil else "değere dahil değil"
+        sube = f" · {int(r.sube)} şube" if r.sube and r.sube > 1 else ""
+        a.markdown(f"**{r.kanal_ad}**")
+        a.caption(f"{etiket}{sube}")
+        b.markdown(f"**{ui.sayi_bicim(r.miktar)}**")
+        st.progress(min(float(r.miktar) / toplam, 1.0))
+    st.caption(f"Son rapor: {ui.tarih_bicim(d['rapor_tarihi'].max())}")
+
+
 def _skt_ozeti(u: pd.Series) -> None:
     st.markdown("##### 📅 SKT Durumu")
     p = db.sorgu("partiler", select="parti_no,skt,giris_miktari,durum",
@@ -160,8 +189,10 @@ def _skt_ozeti(u: pd.Series) -> None:
 
 def _genel_toplam(u: pd.Series) -> None:
     hiz = _haftalik_hiz(u)
-    parcalar = [f"**GENEL TOPLAM {ui.sayi_bicim(u['fiziksel'])}**",
-                f"{ui.sayi_bicim(u['satilabilir'])} satılabilir",
+    genel = u.get("genel_toplam_stok")
+    parcalar = [f"**GENEL TOPLAM {ui.sayi_bicim(genel if pd.notna(genel) else u['fiziksel'])}**",
+                f"depo {ui.sayi_bicim(u['fiziksel'])}",
+                f"partner {ui.sayi_bicim(u.get('partner_toplam_adet'))}",
                 f"{ui.sayi_bicim(u['rezerve'])} rezerve"]
     if hiz and hiz > 0:
         parcalar.append(
@@ -346,9 +377,10 @@ def _partiler(u: pd.Series) -> None:
 def _liste(kart: pd.DataFrame, M: bool) -> None:
     st.caption(f"Ürün seçmeden genel tabloyu görüyorsunuz · {len(kart)} ürün")
     k = {"SKU": kart["sku"], "Ürün": kart["urun_adi"], "Marka": kart["marka"],
-         "Stok": kart["fiziksel"], "Satılabilir": kart["satilabilir"],
+         "Depo": kart["fiziksel"], "Partner": kart["partner_toplam_adet"],
+         "Genel": kart["genel_toplam_stok"], "Satılabilir": kart["satilabilir"],
          "Alım": kart["ithalat_sayisi"], "Satılan": kart["satilan_adet"]}
     if M:
         k["Paçal $"] = kart["ort_birim_maliyet_usd"]
-        k["Stok Değeri $"] = kart["stok_degeri_usd"]
+        k["Stok Değeri $"] = kart["toplam_stok_degeri_usd"]
     ui.tablo(pd.DataFrame(k), anahtar="uk_liste", indir="urun-karti-ozet")
