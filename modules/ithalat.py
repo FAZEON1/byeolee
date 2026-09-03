@@ -51,18 +51,38 @@ def goster() -> None:
         t["Landed Cost"] = df["toplam_landed_try"]
     t["Dağıtım"] = df["dagitim_yapildi"].apply(lambda x: "🟢 Yapıldı" if x else "🟡 Bekliyor")
 
-    ui.tablo(t, anahtar="ith", indir="ithalat", yukseklik=290, kolonlar={
-        "Mal Bedeli": ui.sayi_kolonu("Mal Bedeli", 0, True),
-        "Masraf": ui.sayi_kolonu("Masraf", 0, True),
-        "Masraf %": ui.sayi_kolonu("Masraf %", 1),
-        "Landed Cost": ui.sayi_kolonu("Landed Cost", 0, True),
-    })
+    q = st.text_input("Ara", key="ith_ara", label_visibility="collapsed",
+                      placeholder="Dosya no, tedarikçi, durum…")
+    gosterim = t
+    if q:
+        maske = t.astype(str).apply(
+            lambda s: s.str.lower().str.contains(q.lower(), na=False)).any(axis=1)
+        gosterim = t[maske]
 
-    st.markdown("---")
-    secenekler = {int(r.dosya_id): f"{r.dosya_no} — {r.tedarikci or ''}" for r in df.itertuples()}
-    secili = ui.secim_kutusu("Dosya detayı", secenekler, "ith_secim", bos="— Dosya seçin —")
-    if secili:
-        _detay(int(secili))
+    st.caption("Detayı açmak için satırın soluna tıklayın.")
+    secim = st.dataframe(
+        gosterim, hide_index=True, width="stretch", height=290, key="ith_tablo",
+        on_select="rerun", selection_mode="single-row", column_config={
+            "Mal Bedeli": ui.sayi_kolonu("Mal Bedeli", 0, True),
+            "Masraf": ui.sayi_kolonu("Masraf", 0, True),
+            "Masraf %": ui.sayi_kolonu("Masraf %", 1),
+            "Landed Cost": ui.sayi_kolonu("Landed Cost", 0, True),
+        })
+
+    st.download_button(
+        "⭳ CSV indir", gosterim.to_csv(index=False, sep=";").encode("utf-8-sig"),
+        file_name="ithalat.csv", mime="text/csv", key="ith_csv")
+
+    satirlar = list(getattr(getattr(secim, "selection", None), "rows", []) or [])
+    if satirlar:
+        # Görünen tablo filtrelenmiş olabilir; orijinal satıra index ile dönüyoruz
+        sira = gosterim.index[satirlar[0]]
+        _detay_pencere(int(df.loc[sira, "dosya_id"]))
+
+
+@st.dialog("İthalat Dosyası — Detay", width="large")
+def _detay_pencere(dosya_id: int) -> None:
+    _detay(dosya_id)
 
 
 def _detay(dosya_id: int) -> None:
@@ -177,21 +197,22 @@ def _detay(dosya_id: int) -> None:
         st.dataframe(pd.DataFrame({"Aşama": list(takvim), "Tarih": list(takvim.values())}),
                      hide_index=True, width="stretch")
 
+    # Streamlit iç içe modal desteklemediği için bu iki işlem, detay penceresinin
+    # içinde açılır panel olarak gösteriliyor.
     if auth.yetkili("satinalma"):
-        c1, c2 = st.columns(2)
-        if c1.button("＋ Masraf Ekle", key="ith_masraf", use_container_width=True):
+        st.markdown("---")
+        with st.expander("＋ Masraf Ekle"):
             _masraf_ekle(dosya_id)
-        if not kalem.empty and c2.button("⟳ Maliyeti Dağıt", type="primary",
-                                         key="ith_dagit", use_container_width=True):
-            _dagit(dosya_id)
+        if not kalem.empty:
+            with st.expander("⟳ Maliyeti Dağıt"):
+                _dagit(dosya_id)
 
 
-@st.dialog("Maliyeti Dağıt")
 def _dagit(dosya_id: int) -> None:
     st.info("Tüm masraflar seçilen dağıtım anahtarlarına göre kalemlere yayılacak ve "
             "**ilgili partilerin birim maliyeti güncellenecek**. Maliyet değişirse "
             "revizyon kaydı oluşturulur (BR-08).")
-    if st.button("Dağıt", type="primary"):
+    if st.button("Dağıt", type="primary", key=f"dagit_{dosya_id}"):
         try:
             s = db.rpc("landed_cost_dagit", {"p_dosya_id": dosya_id})
             st.success(f"{s.get('kalem_sayisi')} kalem için birim landed cost hesaplandı.")
@@ -207,15 +228,17 @@ def _dagit(dosya_id: int) -> None:
             st.error(f"Dağıtılamadı: {e}")
 
 
-@st.dialog("Masraf Kalemi Ekle")
 def _masraf_ekle(dosya_id: int) -> None:
     kalemler = db.ref()["masraf"]
-    secim = st.selectbox("Masraf Kalemi *", kalemler, format_func=lambda m: m["ad"])
-    aciklama = st.text_input("Açıklama")
+    secim = st.selectbox("Masraf Kalemi *", kalemler, format_func=lambda m: m["ad"],
+                         key=f"mk_tip_{dosya_id}")
+    aciklama = st.text_input("Açıklama", key=f"mk_ack_{dosya_id}")
     c1, c2, c3 = st.columns(3)
-    tutar = c1.number_input("Tutar *", min_value=0.0, step=100.0)
-    doviz = c2.selectbox("Döviz", ["TRY", "USD", "EUR", "GBP"])
-    kur = c3.number_input("Kur", value=KUR_VARSAYILAN.get(doviz, 1.0), step=0.01)
+    tutar = c1.number_input("Tutar *", min_value=0.0, step=100.0,
+                            key=f"mk_tutar_{dosya_id}")
+    doviz = c2.selectbox("Döviz", ["TRY", "USD", "EUR", "GBP"], key=f"mk_dvz_{dosya_id}")
+    kur = c3.number_input("Kur", value=KUR_VARSAYILAN.get(doviz, 1.0), step=0.01,
+                          key=f"mk_kur_{dosya_id}")
     c1, c2 = st.columns(2)
     dagitim = c1.selectbox(
         "Dağıtım Anahtarı *", ["mal_bedeli", "adet", "agirlik", "hacim", "esit"],
@@ -223,13 +246,15 @@ def _masraf_ekle(dosya_id: int) -> None:
             secim["varsayilan_dagitim"]) if secim["varsayilan_dagitim"] in
             ["mal_bedeli", "adet", "agirlik", "hacim", "esit"] else 0,
         format_func=lambda d: ui.DAGITIM_AD.get(d, d),
-        help="Navlun genelde hacme, gümrük vergisi mal bedeline göre dağıtılır.")
-    belge = c2.text_input("Belge No")
+        help="Navlun genelde hacme, gümrük vergisi mal bedeline göre dağıtılır.",
+        key=f"mk_dgt_{dosya_id}")
+    belge = c2.text_input("Belge No", key=f"mk_blg_{dosya_id}")
     dahil = st.checkbox("Maliyete dahil et (KDV için işaretlemeyin — indirilecek KDV)",
-                        value=bool(secim["maliyete_dahil"]))
-    gec = st.checkbox("Sonradan gelen fatura (maliyet revize edilecek)")
+                        value=bool(secim["maliyete_dahil"]), key=f"mk_dhl_{dosya_id}")
+    gec = st.checkbox("Sonradan gelen fatura (maliyet revize edilecek)",
+                      key=f"mk_gec_{dosya_id}")
 
-    if st.button("Ekle", type="primary"):
+    if st.button("Ekle", type="primary", key=f"masraf_ekle_{dosya_id}"):
         if tutar <= 0:
             st.error("Tutar gerekli.")
             return
