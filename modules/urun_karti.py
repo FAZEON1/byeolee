@@ -1,13 +1,11 @@
-"""Ürün Kartı — bir ürünle ilgili her şey tek ekranda.
+"""Ürün Kartı — bir ürünle ilgili her şey tek kartta.
 
-İthalat geçmişi (gerçek landed cost), satış geçmişi, stok ve parti durumu.
+Düzen: üstte künye şeridi ve stok rozeti, altında hızlı arama, sonra sekmeler.
+Özet sekmesinde dört KPI (stok, stok değeri, paçal maliyet, liste satış),
+depo ve SKT kırılımı, en altta genel toplam ve "kaç hafta yeter" satırı.
 
-Maliyet kaynağı `v_urun_ithalat_ozet`; bu da `ithalat_kalemleri.birim_landed_try`
-üzerinden hesaplanır. Geçmiş ithalatlar salt maliyet kaydı olarak yüklendiği için
-partilere bağlı değildir; bu yüzden maliyet partilerden değil ithalattan okunur.
-
-Kârlılık uyarısı: buradaki brüt kâr pazaryeri komisyonunu ve kargoyu İÇERMEZ.
-Net kâr için Finans → Hakediş & Komisyon ekranındaki veri gerekir.
+Maliyet kaynağı `v_urun_ithalat_ozet` (gerçek landed cost, KDV hariç).
+Satış kaynağı `v_kanal_satis_karlilik` (pazaryeri panel raporları).
 """
 from __future__ import annotations
 
@@ -16,9 +14,15 @@ import streamlit as st
 
 from lib import auth, db, ui
 
+LOK_TIP = {
+    "mal_kabul": "Mal Kabul", "ana_depo": "Ana Depo", "toplama": "Toplama",
+    "karantina": "Karantina", "iade": "İade", "hasarli": "Hasarlı",
+    "sevkiyat": "Sevkiyat",
+}
+
 
 def goster() -> None:
-    ui.baslik("Ürün Kartı", "ithalat · maliyet · satış · stok")
+    ui.baslik("Ürün Kartı", "stok · maliyet · alım · satış")
     M = auth.maliyet_gorur()
 
     kart = db.sorgu("v_urun_karti", sira="sku")
@@ -26,166 +30,295 @@ def goster() -> None:
         st.info("Katalogda ürün yok.")
         return
 
-    secenekler = {
-        int(r.urun_id): f"{r.sku} — {r.urun_adi}"
-        for r in kart.itertuples()
-    }
-    secili = ui.secim_kutusu("Ürün", secenekler, "uk_secim", bos="— Ürün seçin —")
+    secenekler = {int(r.urun_id): f"{r.sku} — {r.urun_adi}" for r in kart.itertuples()}
+    secili = ui.secim_kutusu(
+        "🔍 SKU / model yaz → listeden seç, kart açılır",
+        secenekler, "uk_secim", bos="— Ürün seçin —")
     if not secili:
         _liste(kart, M)
         return
 
     u = kart[kart["urun_id"] == int(secili)].iloc[0]
-    _detay(u, M)
+    _kunye(u)
+
+    t1, t2, t3, t4, t5 = st.tabs(
+        ["📊 Özet", "🚢 Alımlar", "🧾 Satışlar", "📈 Analiz", "📦 Parti & SKT"])
+    with t1:
+        _ozet(u, M)
+    with t2:
+        _alimlar(u, M)
+    with t3:
+        _satislar(u, M)
+    with t4:
+        _analiz(u, M)
+    with t5:
+        _partiler(u)
+
+
+# --------------------------------------------------------------------- künye
+def _kunye(u: pd.Series) -> None:
+    c1, c2 = st.columns([5, 1])
+    with c1:
+        st.markdown(f"### {u['sku']}")
+        st.markdown(f"**{u['urun_adi']}**")
+        alt = []
+        if u.get("marka"):
+            alt.append(f"Marka: **{u['marka']}**")
+        if u.get("kategori"):
+            alt.append(f"Kategori: **{u['kategori']}**")
+        st.caption(" · ".join(alt) if alt else "")
+    with c2:
+        st.metric("Stok", ui.sayi_bicim(u["fiziksel"]))
+    st.markdown("---")
+
+
+# ---------------------------------------------------------------------- özet
+def _ozet(u: pd.Series, M: bool) -> None:
+    kartlar = [
+        {"baslik": "Bizim Stok", "deger": ui.sayi_bicim(u["fiziksel"]),
+         "alt": f"{ui.sayi_bicim(u['satilabilir'])} satılabilir", "renk": "lacivert"},
+    ]
+    if M:
+        kartlar += [
+            {"baslik": "Stok Değeri", "deger": ui.para0(u.get("stok_degeri_try")),
+             "alt": "paçal × canlı stok", "renk": "yesil"},
+            {"baslik": "Paçal Maliyet", "deger": ui.para(u.get("ort_birim_maliyet_try")),
+             "alt": "adet-ağırlıklı landed cost", "renk": "kirmizi"},
+        ]
+    else:
+        kartlar.append({"baslik": "Rezerve", "deger": ui.sayi_bicim(u["rezerve"]),
+                        "alt": "siparişlere bağlı", "renk": "turuncu"})
+    kartlar.append({"baslik": "Liste Satış", "deger": ui.para(u.get("liste_fiyati")),
+                    "alt": "güncel", "renk": "gri"})
+    ui.kpi_satiri(kartlar)
+
+    c1, c2 = st.columns(2)
+    with c1:
+        _depolar(u)
+    with c2:
+        _skt_ozeti(u)
+
+    _genel_toplam(u)
+
+
+def _depolar(u: pd.Series) -> None:
+    st.markdown("##### 🏬 Depolarımız")
+    s = db.sorgu("stok", select="fiziksel_miktar,rezerve_miktar,depolar(ad),"
+                                "lokasyonlar(kod,tip)",
+                 filtreler=[("urun_id", "eq", int(u["urun_id"])),
+                            ("fiziksel_miktar", "gt", 0)])
+    if s.empty:
+        st.info("Depoda fiziksel stok yok.")
+        return
+    s = s.copy()
+    s["depo"] = s["depolar"].apply(lambda x: (x or {}).get("ad") or "—")
+    s["tip"] = s["lokasyonlar"].apply(lambda x: LOK_TIP.get((x or {}).get("tip"), "—"))
+    g = (s.groupby(["depo", "tip"], as_index=False)
+           .agg(miktar=("fiziksel_miktar", "sum")))
+    toplam = float(g["miktar"].sum()) or 1.0
+    for r in g.sort_values("miktar", ascending=False).itertuples():
+        a, b = st.columns([4, 1])
+        a.markdown(f"**{r.depo}** · {r.tip}")
+        b.markdown(f"**{ui.sayi_bicim(r.miktar)}**")
+        st.progress(min(float(r.miktar) / toplam, 1.0))
+
+
+def _skt_ozeti(u: pd.Series) -> None:
+    st.markdown("##### 📅 SKT Durumu")
+    p = db.sorgu("partiler", select="parti_no,skt,giris_miktari,durum",
+                 filtreler=[("urun_id", "eq", int(u["urun_id"]))], sira="skt")
+    if p.empty:
+        st.info("Parti kaydı yok.")
+        return
+    bugun = pd.Timestamp.today().normalize()
+    kalan = (pd.to_datetime(p["skt"], errors="coerce") - bugun).dt.days
+    st.markdown(f"🟢 **{int((kalan > 90).sum())}** parti · 90 günden uzun")
+    st.markdown(f"🟡 **{int(((kalan >= 0) & (kalan <= 90)).sum())}** parti · 90 gün içinde")
+    st.markdown(f"🔴 **{int((kalan < 0).sum())}** parti · süresi geçmiş")
+    if pd.notna(u.get("en_yakin_skt")):
+        st.caption(f"En yakın SKT: **{ui.tarih_bicim(u['en_yakin_skt'])}**")
+
+
+def _genel_toplam(u: pd.Series) -> None:
+    hiz = _haftalik_hiz(u)
+    parcalar = [f"**GENEL TOPLAM {ui.sayi_bicim(u['fiziksel'])}**",
+                f"{ui.sayi_bicim(u['satilabilir'])} satılabilir",
+                f"{ui.sayi_bicim(u['rezerve'])} rezerve"]
+    if hiz and hiz > 0:
+        parcalar.append(
+            f"~{float(u['satilabilir'] or 0) / hiz:.0f} hafta yeter "
+            f"(haftada {hiz:.0f} adet)")
+    st.markdown("---")
+    st.markdown(" · ".join(parcalar))
+
+    alt = []
+    if pd.notna(u.get("ilk_ithalat")):
+        alt.append(f"İlk alım: {ui.tarih_bicim(u['ilk_ithalat'])}")
+    if pd.notna(u.get("son_ithalat")):
+        alt.append(f"Son alım: {ui.tarih_bicim(u['son_ithalat'])}")
+    if u.get("son_tedarikci"):
+        alt.append(f"Tedarikçi: {u['son_tedarikci']}")
+    if alt:
+        st.caption(" · ".join(alt))
+
+    if (u.get("yeniden_siparis_nokta") or 0) > 0 and \
+       (u.get("satilabilir") or 0) <= (u.get("yeniden_siparis_nokta") or 0):
+        st.warning(
+            f"Satılabilir stok sipariş noktasının "
+            f"({ui.sayi_bicim(u['yeniden_siparis_nokta'])}) altında.", icon="⚠️")
+
+
+def _haftalik_hiz(u: pd.Series) -> float | None:
+    """Son yılın satışından haftalık tüketim hızı."""
+    s = db.sorgu("v_kanal_satis_karlilik",
+                 filtreler=[("urun_id", "eq", int(u["urun_id"]))])
+    if s.empty:
+        return None
+    s = s.copy()
+    s["yil"] = pd.to_numeric(s["yil"], errors="coerce")
+    s["net_satis_adet"] = pd.to_numeric(s["net_satis_adet"], errors="coerce")
+    son = s[s["yil"] == s["yil"].max()]
+    return float(son["net_satis_adet"].sum()) / 52.0 if not son.empty else None
+
+
+# ------------------------------------------------------------------- alımlar
+def _alimlar(u: pd.Series, M: bool) -> None:
+    g = db.sorgu("v_urun_ithalat_gecmisi",
+                 filtreler=[("urun_id", "eq", int(u["urun_id"]))],
+                 sira="ithalat_tarihi", tersine=True)
+    if g.empty:
+        st.info("Bu ürün için ithalat kaydı yok.")
+        return
+    if M:
+        st.caption(
+            f"{int(u['ithalat_sayisi'] or 0)} ithalat · "
+            f"{ui.sayi_bicim(u['toplam_ithal_adet'])} adet · "
+            f"en düşük {ui.para(u.get('en_dusuk_birim_try'))} · "
+            f"en yüksek {ui.para(u.get('en_yuksek_birim_try'))}")
+    t = {"Tarih": g["ithalat_tarihi"], "Dosya": g["dosya_no"],
+         "Tedarikçi": g["tedarikci"], "Adet": g["adet"]}
+    if M:
+        t.update({"Birim FOB": g["birim_fob"], "Mal Bedeli ₺": g["mal_bedeli_try"],
+                  "Masraf ₺": g["dagitilan_masraf_try"],
+                  "Binen %": g["binen_masraf_orani"],
+                  "Paçal ₺": g["birim_landed_try"], "Paçal $": g["birim_landed_usd"]})
+    ui.tablo(pd.DataFrame(t), anahtar="uk_alim", indir=f"alim-{u['sku']}")
+
+
+# ------------------------------------------------------------------ satışlar
+def _satislar(u: pd.Series, M: bool) -> None:
+    s = db.sorgu("v_kanal_satis_karlilik",
+                 filtreler=[("urun_id", "eq", int(u["urun_id"]))],
+                 sira="yil", tersine=True)
+    if s.empty:
+        st.info("Bu ürün için satış kaydı yok.")
+        return
+    s = s.copy()
+    for a in ("net_satis_adet", "iade_adet", "net_ciro", "komisyon_tutari",
+              "toplam_maliyet_try", "net_kar_try", "kar_marji", "ort_satis_fiyati"):
+        s[a] = pd.to_numeric(s[a], errors="coerce")
+
+    kartlar = [
+        {"baslik": "Toplam Satış", "deger": ui.sayi_bicim(s["net_satis_adet"].sum()),
+         "alt": f"{s['yil'].nunique()} yıl", "renk": "lacivert"},
+        {"baslik": "Ciro", "deger": ui.para0(s["net_ciro"].sum()),
+         "alt": "KDV dahil", "renk": "lacivert"},
+    ]
+    if M:
+        kar = float(s["net_kar_try"].sum())
+        kartlar += [
+            {"baslik": "Komisyon", "deger": ui.para0(s["komisyon_tutari"].sum()),
+             "alt": "", "renk": "kirmizi"},
+            {"baslik": "Net Kâr", "deger": ui.para0(kar), "alt": "",
+             "renk": "yesil" if kar > 0 else "kirmizi"},
+        ]
+    else:
+        kartlar.append({"baslik": "İade", "deger": ui.sayi_bicim(s["iade_adet"].sum()),
+                        "alt": "", "renk": "sari"})
+    ui.kpi_satiri(kartlar)
+
+    t = {"Kanal": s["kanal"], "Yıl": s["yil"].astype(str),
+         "Adet": s["net_satis_adet"], "İade": s["iade_adet"],
+         "Ort. Fiyat": s["ort_satis_fiyati"], "Ciro": s["net_ciro"]}
+    if M:
+        t.update({"Komisyon": s["komisyon_tutari"], "Maliyet": s["toplam_maliyet_try"],
+                  "Net Kâr": s["net_kar_try"],
+                  "Marj %": (s["kar_marji"] * 100).round(1)})
+    ui.tablo(pd.DataFrame(t), anahtar="uk_satis", arama=False,
+             indir=f"satis-{u['sku']}")
+
+
+# -------------------------------------------------------------------- analiz
+def _analiz(u: pd.Series, M: bool) -> None:
+    if not M:
+        st.info("Analiz için maliyet yetkisi gerekiyor.")
+        return
+
+    satildi = float(u.get("satilan_adet") or 0)
+    ithal = float(u.get("toplam_ithal_adet") or 0)
+    oran = (satildi / ithal * 100) if ithal else 0
+    ui.kpi_satiri([
+        {"baslik": "İthal / Satış",
+         "deger": f"{ui.sayi_bicim(ithal)} / {ui.sayi_bicim(satildi)}",
+         "alt": f"%{oran:.0f} satıldı", "renk": "lacivert"},
+        {"baslik": "Birim Marj", "deger": ui.para(u.get("birim_marj_try")),
+         "alt": "ort. satış − paçal maliyet",
+         "renk": "yesil" if (u.get("birim_marj_try") or 0) > 0 else "kirmizi"},
+        {"baslik": "Stok Devri", "deger": f"%{oran:.0f}",
+         "alt": "ithal edilenin satılan oranı", "renk": "gri"},
+        {"baslik": "Kalan Stok Değeri", "deger": ui.para0(u.get("stok_degeri_try")),
+         "alt": "", "renk": "turuncu"},
+    ])
+
+    g = db.sorgu("v_urun_ithalat_gecmisi",
+                 filtreler=[("urun_id", "eq", int(u["urun_id"]))],
+                 sira="ithalat_tarihi")
+    if len(g) > 1:
+        st.caption("**Paçal maliyetin ithalattan ithalata seyri**")
+        seri = g[["ithalat_tarihi", "birim_landed_try"]].copy()
+        seri["ithalat_tarihi"] = pd.to_datetime(seri["ithalat_tarihi"], errors="coerce")
+        seri["birim_landed_try"] = pd.to_numeric(seri["birim_landed_try"],
+                                                  errors="coerce")
+        seri = seri.dropna()
+        if not seri.empty:
+            ui.zaman_serisi(seri, "ithalat_tarihi", "birim_landed_try")
+
+    ui.kural_notu(
+        "Paçal maliyet tüm ithalatların adet-ağırlıklı ortalamasıdır ve KDV hariçtir. "
+        "Net kâr hesabına <b>kargo, platform hizmet bedeli ve reklam gideri dahil "
+        "değildir</b>."
+    )
+
+
+# ------------------------------------------------------------------ partiler
+def _partiler(u: pd.Series) -> None:
+    p = db.sorgu("partiler",
+                 select="parti_no,skt,uretim_tarihi,giris_miktari,durum",
+                 filtreler=[("urun_id", "eq", int(u["urun_id"]))], sira="skt")
+    if p.empty:
+        st.info("Parti kaydı yok.")
+        return
+    bugun = pd.Timestamp.today().normalize()
+    skt = pd.to_datetime(p["skt"], errors="coerce")
+    kalan = (skt - bugun).dt.days
+    ui.tablo(pd.DataFrame({
+        "Parti No": p["parti_no"],
+        "SKT": skt.apply(ui.tarih_bicim),
+        "Kalan Gün": kalan,
+        "Giriş Miktarı": p["giris_miktari"],
+        "Durum": p["durum"].apply(ui.durum_etiket),
+        "Uyarı": kalan.apply(lambda k: "🔴" if pd.notna(k) and k < 0
+                             else ("🟡" if pd.notna(k) and k <= 90 else "🟢")),
+    }), anahtar="uk_parti", arama=False, indir=f"parti-{u['sku']}")
 
 
 # --------------------------------------------------------------------- liste
 def _liste(kart: pd.DataFrame, M: bool) -> None:
-    st.caption("Ürün seçmeden genel tabloyu görüyorsunuz. Satır sayısı: "
-               f"{len(kart)}")
-    kolonlar = {
-        "SKU": kart["sku"], "Ürün": kart["urun_adi"], "Marka": kart["marka"],
-        "Stok": kart["fiziksel"], "Satılabilir": kart["satilabilir"],
-        "İthalat": kart["ithalat_sayisi"], "Satılan": kart["satilan_adet"],
-    }
+    st.caption(f"Ürün seçmeden genel tabloyu görüyorsunuz · {len(kart)} ürün")
+    k = {"SKU": kart["sku"], "Ürün": kart["urun_adi"], "Marka": kart["marka"],
+         "Stok": kart["fiziksel"], "Satılabilir": kart["satilabilir"],
+         "Alım": kart["ithalat_sayisi"], "Satılan": kart["satilan_adet"]}
     if M:
-        kolonlar["Ort. Maliyet ₺"] = kart["ort_birim_maliyet_try"]
-        kolonlar["Stok Değeri ₺"] = kart["stok_degeri_try"]
-        kolonlar["Brüt Kâr ₺"] = kart["brut_kar_try"]
-    ui.tablo(pd.DataFrame(kolonlar), anahtar="uk_liste", indir="urun-karti-ozet")
-
-
-# --------------------------------------------------------------------- detay
-def _detay(u: pd.Series, M: bool) -> None:
-    st.markdown(f"### {u['sku']} — {u['urun_adi']}")
-    alt = " · ".join(str(x) for x in [u.get("marka"), u.get("kategori"),
-                                      ui.durum_etiket(u.get("durum"))] if x)
-    st.caption(alt)
-
-    kartlar = [
-        {"baslik": "Fiziksel Stok", "deger": ui.sayi_bicim(u["fiziksel"]),
-         "alt": f"{ui.sayi_bicim(u['rezerve'])} rezerve", "renk": "lacivert"},
-        {"baslik": "Satılabilir", "deger": ui.sayi_bicim(u["satilabilir"]),
-         "alt": f"{int(u['parti_sayisi'] or 0)} parti", "renk": "yesil"},
-        {"baslik": "Toplam İthal", "deger": ui.sayi_bicim(u["toplam_ithal_adet"]),
-         "alt": f"{int(u['ithalat_sayisi'] or 0)} ithalat", "renk": "gri"},
-        {"baslik": "Toplam Satış", "deger": ui.sayi_bicim(u["satilan_adet"]),
-         "alt": f"{int(u['siparis_sayisi'] or 0)} sipariş", "renk": "turuncu"},
-    ]
-    ui.kpi_satiri(kartlar)
-
-    if M:
-        marj = u.get("birim_marj_try")
-        ui.kpi_satiri([
-            {"baslik": "Ort. Birim Maliyet", "deger": ui.para(u.get("ort_birim_maliyet_try")),
-             "alt": "ağırlıklı ortalama landed cost", "renk": "lacivert"},
-            {"baslik": "Son İthalat Maliyeti", "deger": ui.para(u.get("son_birim_maliyet_try")),
-             "alt": (f"${ui.sayi_bicim(u.get('son_birim_maliyet_usd'), 4)}"
-                     if pd.notna(u.get("son_birim_maliyet_usd")) else ""),
-             "renk": "gri"},
-            {"baslik": "Stok Değeri", "deger": ui.para0(u.get("stok_degeri_try")),
-             "alt": "maliyet üzerinden", "renk": "yesil"},
-            {"baslik": "Birim Marj", "deger": ui.para(marj) if pd.notna(marj) else "—",
-             "alt": "ort. satış − ort. maliyet",
-             "renk": "yesil" if (pd.notna(marj) and marj > 0) else "kirmizi"},
-        ])
-
-    st.markdown("---")
-    t1, t2, t3 = st.tabs(["🚢 İthalat Geçmişi", "🧾 Satış & Kârlılık", "📋 Künye"])
-
-    # ------------------------------------------------------------ ithalat
-    with t1:
-        g = db.sorgu("v_urun_ithalat_gecmisi",
-                     filtreler=[("urun_id", "eq", int(u["urun_id"]))],
-                     sira="ithalat_tarihi", tersine=True)
-        if g.empty:
-            st.info("Bu ürün için ithalat kaydı yok.")
-        else:
-            if M:
-                st.caption(
-                    f"En düşük birim maliyet {ui.para(u.get('en_dusuk_birim_try'))} · "
-                    f"en yüksek {ui.para(u.get('en_yuksek_birim_try'))} · "
-                    f"ilk ithalat {ui.tarih_bicim(u.get('ilk_ithalat'))} · "
-                    f"son tedarikçi {u.get('son_tedarikci') or '—'}")
-            tablo = {
-                "Tarih": g["ithalat_tarihi"],
-                "Dosya": g["dosya_no"],
-                "Tedarikçi": g["tedarikci"],
-                "Adet": g["adet"],
-            }
-            if M:
-                tablo.update({
-                    "Birim FOB": g["birim_fob"],
-                    "Mal Bedeli ₺": g["mal_bedeli_try"],
-                    "Dağıtılan Masraf ₺": g["dagitilan_masraf_try"],
-                    "Binen %": g["binen_masraf_orani"],
-                    "Birim Landed ₺": g["birim_landed_try"],
-                    "Birim Landed $": g["birim_landed_usd"],
-                })
-            ui.tablo(pd.DataFrame(tablo), anahtar="uk_ith",
-                     indir=f"ithalat-{u['sku']}")
-
-            if M and len(g) > 1:
-                st.caption("Birim maliyetin ithalattan ithalata seyri:")
-                seri = g[["ithalat_tarihi", "birim_landed_try"]].copy()
-                seri["ithalat_tarihi"] = pd.to_datetime(seri["ithalat_tarihi"],
-                                                        errors="coerce")
-                seri["birim_landed_try"] = pd.to_numeric(seri["birim_landed_try"],
-                                                          errors="coerce")
-                seri = seri.dropna().sort_values("ithalat_tarihi")
-                ui.zaman_serisi(seri, "ithalat_tarihi", "birim_landed_try")
-
-    # ------------------------------------------------------------ satış
-    with t2:
-        if not u["satilan_adet"]:
-            st.info("Bu ürün için satış kaydı yok.")
-        else:
-            st.markdown(
-                f"**{ui.sayi_bicim(u['satilan_adet'])} adet** satılmış "
-                f"({ui.sayi_bicim((u.get('satis_orani') or 0) * 100, 1)}% — "
-                f"ithal edilenin oranı), "
-                f"ilk satış {ui.tarih_bicim(u.get('ilk_satis'))}, "
-                f"son satış {ui.tarih_bicim(u.get('son_satis'))}.")
-            if M:
-                ui.kpi_satiri([
-                    {"baslik": "Ciro", "deger": ui.para0(u.get("ciro_try")),
-                     "alt": "KDV dahil satır toplamı", "renk": "lacivert"},
-                    {"baslik": "Satılan Malın Maliyeti",
-                     "deger": ui.para0((u.get("ciro_try") or 0) - (u.get("brut_kar_try") or 0)),
-                     "alt": "", "renk": "turuncu"},
-                    {"baslik": "Brüt Kâr", "deger": ui.para0(u.get("brut_kar_try")),
-                     "alt": f"%{ui.sayi_bicim((u.get('brut_kar_marji') or 0) * 100, 1)} marj",
-                     "renk": "yesil" if (u.get("brut_kar_try") or 0) > 0 else "kirmizi"},
-                    {"baslik": "Ort. Satış Fiyatı",
-                     "deger": ui.para(u.get("ort_satis_fiyati")), "alt": "", "renk": "gri"},
-                ])
-                ui.kural_notu(
-                    "Buradaki brüt kâr <b>pazaryeri komisyonunu, kargoyu ve iadeleri "
-                    "içermez</b>. Gerçek net kâr için Finans → Hakediş & Komisyon "
-                    "ekranındaki Trendyol hakediş verisi gerekir."
-                )
-
-    # ------------------------------------------------------------ künye
-    with t3:
-        bilgi = {
-            "SKU": u["sku"],
-            "Ürün Adı": u["urun_adi"],
-            "Marka / Kategori": f"{u.get('marka') or '—'} · {u.get('kategori') or '—'}",
-            "Durum": ui.durum_etiket(u.get("durum")),
-            "Liste Fiyatı": ui.para(u.get("liste_fiyati")),
-            "Min. Stok / Sipariş Noktası":
-                f"{ui.sayi_bicim(u.get('min_stok'))} / {ui.sayi_bicim(u.get('yeniden_siparis_nokta'))}",
-            "En Yakın SKT": ui.tarih_bicim(u.get("en_yakin_skt")),
-            "Parti Sayısı": ui.sayi_bicim(u.get("parti_sayisi")),
-            "Son Tedarikçi": u.get("son_tedarikci") or "—",
-        }
-        st.dataframe(
-            pd.DataFrame({"Alan": list(bilgi), "Değer": [str(v) for v in bilgi.values()]}),
-            hide_index=True, width="stretch")
-
-        if (u.get("yeniden_siparis_nokta") or 0) > 0 and \
-           (u.get("satilabilir") or 0) <= (u.get("yeniden_siparis_nokta") or 0):
-            st.warning(
-                f"Satılabilir stok ({ui.sayi_bicim(u['satilabilir'])}) sipariş "
-                f"noktasının ({ui.sayi_bicim(u['yeniden_siparis_nokta'])}) altında. "
-                "Yeni ithalat planlanmalı.", icon="⚠️")
+        k["Paçal ₺"] = kart["ort_birim_maliyet_try"]
+        k["Stok Değeri ₺"] = kart["stok_degeri_try"]
+    ui.tablo(pd.DataFrame(k), anahtar="uk_liste", indir="urun-karti-ozet")
