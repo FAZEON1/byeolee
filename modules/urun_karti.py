@@ -21,9 +21,18 @@ LOK_TIP = {
 }
 
 
+def _guncel_kur() -> float:
+    """Ayarlardaki USD/TRY kuru. Ayarlar → Genel ekranından değiştirilebilir."""
+    try:
+        return float(str(db.ayar("usd_kuru", 47.71)).replace(",", "."))
+    except (TypeError, ValueError):
+        return 47.71
+
+
 def goster() -> None:
     ui.baslik("Ürün Kartı", "stok · maliyet · alım · satış")
     M = auth.maliyet_gorur()
+    kur = _guncel_kur()
 
     kart = db.sorgu("v_urun_karti", sira="sku")
     if kart.empty:
@@ -44,13 +53,13 @@ def goster() -> None:
     t1, t2, t3, t4, t5 = st.tabs(
         ["📊 Özet", "🚢 Alımlar", "🧾 Satışlar", "📈 Analiz", "📦 Parti & SKT"])
     with t1:
-        _ozet(u, M)
+        _ozet(u, M, kur)
     with t2:
         _alimlar(u, M)
     with t3:
         _satislar(u, M)
     with t4:
-        _analiz(u, M)
+        _analiz(u, M, kur)
     with t5:
         _partiler(u)
 
@@ -73,17 +82,27 @@ def _kunye(u: pd.Series) -> None:
 
 
 # ---------------------------------------------------------------------- özet
-def _ozet(u: pd.Series, M: bool) -> None:
+def _dolar(v, ondalik: int = 2) -> str:
+    return "—" if v is None or pd.isna(v) else f"${float(v):,.{ondalik}f}"
+
+
+def _ozet(u: pd.Series, M: bool, kur: float) -> None:
     kartlar = [
         {"baslik": "Bizim Stok", "deger": ui.sayi_bicim(u["fiziksel"]),
          "alt": f"{ui.sayi_bicim(u['satilabilir'])} satılabilir", "renk": "lacivert"},
     ]
     if M:
+        pacal_usd = u.get("ort_birim_maliyet_usd")
+        stok_usd = u.get("stok_degeri_usd")
         kartlar += [
-            {"baslik": "Stok Değeri", "deger": ui.para0(u.get("stok_degeri_try")),
-             "alt": "paçal × canlı stok", "renk": "yesil"},
-            {"baslik": "Paçal Maliyet", "deger": ui.para(u.get("ort_birim_maliyet_try")),
-             "alt": "adet-ağırlıklı landed cost", "renk": "kirmizi"},
+            {"baslik": "Stok Değeri", "deger": _dolar(stok_usd, 0),
+             "alt": (f"≈ {ui.para0(float(stok_usd) * kur)} · kur {kur:.2f}"
+                     if pd.notna(stok_usd) else "paçal × canlı stok"),
+             "renk": "yesil"},
+            {"baslik": "Paçal Maliyet", "deger": _dolar(pacal_usd, 4),
+             "alt": (f"≈ {ui.para(float(pacal_usd) * kur)} · güncel kurla"
+                     if pd.notna(pacal_usd) else "adet-ağırlıklı landed cost"),
+             "renk": "kirmizi"},
         ]
     else:
         kartlar.append({"baslik": "Rezerve", "deger": ui.sayi_bicim(u["rezerve"]),
@@ -193,15 +212,19 @@ def _alimlar(u: pd.Series, M: bool) -> None:
         st.caption(
             f"{int(u['ithalat_sayisi'] or 0)} ithalat · "
             f"{ui.sayi_bicim(u['toplam_ithal_adet'])} adet · "
-            f"en düşük {ui.para(u.get('en_dusuk_birim_try'))} · "
-            f"en yüksek {ui.para(u.get('en_yuksek_birim_try'))}")
+            f"en düşük {_dolar(u.get('en_dusuk_birim_usd'), 4)} · "
+            f"en yüksek {_dolar(u.get('en_yuksek_birim_usd'), 4)} "
+            f"(ithalat kurlarıyla)")
     t = {"Tarih": g["ithalat_tarihi"], "Dosya": g["dosya_no"],
          "Tedarikçi": g["tedarikci"], "Adet": g["adet"]}
     if M:
-        t.update({"Birim FOB": g["birim_fob"], "Mal Bedeli ₺": g["mal_bedeli_try"],
-                  "Masraf ₺": g["dagitilan_masraf_try"],
+        t.update({"Birim FOB $": g["birim_fob"],
+                  "Paçal $": g["birim_landed_usd"],
+                  "Paçal ₺ (o gün)": g["birim_landed_try"],
+                  "Kur": g["kur"],
                   "Binen %": g["binen_masraf_orani"],
-                  "Paçal ₺": g["birim_landed_try"], "Paçal $": g["birim_landed_usd"]})
+                  "Mal Bedeli ₺": g["mal_bedeli_try"],
+                  "Masraf ₺": g["dagitilan_masraf_try"]})
     ui.tablo(pd.DataFrame(t), anahtar="uk_alim", indir=f"alim-{u['sku']}")
 
 
@@ -249,7 +272,7 @@ def _satislar(u: pd.Series, M: bool) -> None:
 
 
 # -------------------------------------------------------------------- analiz
-def _analiz(u: pd.Series, M: bool) -> None:
+def _analiz(u: pd.Series, M: bool, kur: float) -> None:
     if not M:
         st.info("Analiz için maliyet yetkisi gerekiyor.")
         return
@@ -262,12 +285,17 @@ def _analiz(u: pd.Series, M: bool) -> None:
          "deger": f"{ui.sayi_bicim(ithal)} / {ui.sayi_bicim(satildi)}",
          "alt": f"%{oran:.0f} satıldı", "renk": "lacivert"},
         {"baslik": "Birim Marj", "deger": ui.para(u.get("birim_marj_try")),
-         "alt": "ort. satış − paçal maliyet",
+         "alt": (f"paçal {_dolar(u.get('ort_birim_maliyet_usd'), 4)} "
+                 f"≈ {ui.para(float(u['ort_birim_maliyet_usd']) * kur)}"
+                 if pd.notna(u.get("ort_birim_maliyet_usd"))
+                 else "ort. satış − paçal maliyet"),
          "renk": "yesil" if (u.get("birim_marj_try") or 0) > 0 else "kirmizi"},
         {"baslik": "Stok Devri", "deger": f"%{oran:.0f}",
          "alt": "ithal edilenin satılan oranı", "renk": "gri"},
-        {"baslik": "Kalan Stok Değeri", "deger": ui.para0(u.get("stok_degeri_try")),
-         "alt": "", "renk": "turuncu"},
+        {"baslik": "Kalan Stok Değeri", "deger": _dolar(u.get("stok_degeri_usd"), 0),
+         "alt": (f"≈ {ui.para0(float(u['stok_degeri_usd']) * kur)} güncel kurla"
+                 if pd.notna(u.get("stok_degeri_usd")) else ""),
+         "renk": "turuncu"},
     ])
 
     g = db.sorgu("v_urun_ithalat_gecmisi",
@@ -284,7 +312,9 @@ def _analiz(u: pd.Series, M: bool) -> None:
             ui.zaman_serisi(seri, "ithalat_tarihi", "birim_landed_try")
 
     ui.kural_notu(
-        "Paçal maliyet tüm ithalatların adet-ağırlıklı ortalamasıdır ve KDV hariçtir. "
+        f"Paçal maliyet tüm ithalatların adet-ağırlıklı ortalamasıdır, <b>KDV hariçtir</b> "
+        f"ve dolar cinsinden tutulur. TL karşılıkları <b>{kur:.2f}</b> güncel kuruyla "
+        "hesaplanır (Ayarlar → <code>usd_kuru</code>). "
         "Net kâr hesabına <b>kargo, platform hizmet bedeli ve reklam gideri dahil "
         "değildir</b>."
     )
@@ -319,6 +349,6 @@ def _liste(kart: pd.DataFrame, M: bool) -> None:
          "Stok": kart["fiziksel"], "Satılabilir": kart["satilabilir"],
          "Alım": kart["ithalat_sayisi"], "Satılan": kart["satilan_adet"]}
     if M:
-        k["Paçal ₺"] = kart["ort_birim_maliyet_try"]
-        k["Stok Değeri ₺"] = kart["stok_degeri_try"]
+        k["Paçal $"] = kart["ort_birim_maliyet_usd"]
+        k["Stok Değeri $"] = kart["stok_degeri_usd"]
     ui.tablo(pd.DataFrame(k), anahtar="uk_liste", indir="urun-karti-ozet")
