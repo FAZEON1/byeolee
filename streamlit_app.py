@@ -48,6 +48,7 @@ from modules import (  # noqa: E402
     iadeler, ithalat, kullanicilar, malkabul, partiler, raporlar, satinalma,
     satis_analiz, sayim, sevkiyat, siparisler, stok, urun_karti, urunler, uts,
 )
+from modules import dis_stok  # noqa: E402
 
 # ---------------------------------------------------------------- sayaçlar
 @st.cache_data(ttl=60, show_spinner=False)
@@ -116,6 +117,7 @@ gruplar: dict[str, list] = {
 }
 
 gruplar["Ürün & Stok"].insert(1, _s(urun_karti.goster, "Ürün Kartı", "🪪", "urun-karti"))
+gruplar["Ürün & Stok"].append(_s(dis_stok.goster, "Partner Stoğu", "🛍️", "partner-stok"))
 gruplar["Ürün & Stok"].append(_s(uts.goster, "ÜTS Takibi", "🏷️", "uts"))
 
 if auth.yetkili("depo"):
