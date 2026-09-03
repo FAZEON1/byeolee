@@ -46,7 +46,7 @@ if not auth.oturum_acik():
 from modules import (  # noqa: E402
     ayarlar, bildirimler, cariler, dashboard, denetim, entegrasyon, hareketler,
     iadeler, ithalat, kullanicilar, malkabul, partiler, raporlar, satinalma,
-    sayim, sevkiyat, siparisler, stok, urun_karti, urunler, uts,
+    satis_analiz, sayim, sevkiyat, siparisler, stok, urun_karti, urunler, uts,
 )
 
 # ---------------------------------------------------------------- sayaçlar
@@ -132,6 +132,7 @@ gruplar["Tedarik"].append(_s(cariler.tedarikciler, "Tedarikçiler", "🏭", "ted
 
 if auth.yetkili("satis"):
     gruplar["Satış"].insert(1, _s(sevkiyat.goster, "Toplama & Sevk", "🚚", "sevkiyat"))
+gruplar["Satış"].insert(2, _s(satis_analiz.goster, "Satış Analizi", "📊", "satis-analiz"))
 gruplar["Satış"].append(_s(cariler.musteriler, "Müşteriler", "👥", "musteriler"))
 if auth.yetkili("satis"):
     gruplar["Satış"].append(
